@@ -1,49 +1,56 @@
+#include "toy/AST.h"
 #include "toy/Lexer.h"
-#include "include/toy/AST.h"
+#include "toy/Parser.h"
 
-#include <iostream>
-#include <string>
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/ErrorOr.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/raw_ostream.h"
 
-static std::string tokenKindName(toy::Token t) {
-    switch (t) {
-        case toy::tok_eof:        return "tok_eof";
-        case toy::tok_def:        return "tok_def";
-        case toy::tok_return:     return "tok_return";
-        case toy::tok_var:        return "tok_var";
-        case toy::tok_identifier: return "tok_identifier";
-        case toy::tok_number:     return "tok_number";
-        default:
-            if (t >= 32 && t < 127) {
-                std::string s = "char '";
-                s += static_cast<char>(t);
-                s += "'";
-                return s;
-            }
-            return "unknown(" + std::to_string(static_cast<int>(t)) + ")";
-    }
+namespace cl = llvm::cl;
+
+static cl::opt<std::string> inputFilename(cl::Positional,
+                                          cl::desc("<input toy file>"),
+                                          cl::init("-"),
+                                          cl::value_desc("filename"));
+
+enum Action { None, DumpAST };
+static cl::opt<enum Action> emitAction(
+    "emit", cl::desc("Select the kind of output desired"),
+    cl::values(clEnumValN(DumpAST, "ast", "output the AST dump")));
+
+
+std::unique_ptr<toy::ModuleAST> parseInputFile(llvm::StringRef filename) {
+  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
+      llvm::MemoryBuffer::getFileOrSTDIN(filename);
+
+  if (std::error_code ec = fileOrErr.getError()) {
+    llvm::errs() << "Could not open input file: " << ec.message() << "\n";
+    return nullptr;
+  }
+
+  llvm::StringRef buffer = fileOrErr.get()->getBuffer();
+  toy::LexerBuffer lexer(buffer.begin(), buffer.end(), std::string(filename));
+  toy::Parser parser(lexer);
+  return parser.parseModule();
 }
 
 
-int main() {
-    std::string src = "def main() { var a = [1, 2]; }";
+int main(int argc, char **argv) {
+  cl::ParseCommandLineOptions(argc, argv, "toy compiler\n");
 
-    toy::LexerBuffer lexer(src.data(), src.data() + src.size(), "test.toy");
+  auto moduleAST = parseInputFile(inputFilename);
+  if (!moduleAST)
+    return 1;
 
-    toy::Token tok;
-    while ((tok = lexer.getNextToken()) != toy::tok_eof) {
-        toy::Location loc = lexer.getLastLocation();
+  switch (emitAction) {
+  case Action::DumpAST:
+    toy::dump(*moduleAST);
+    break;
+  default:
+    llvm::errs() << "No action specified (use -emit=ast)\n";
+    break;
+  }
 
-        std::cout << *loc.file << ":" << loc.line << ":" << loc.col
-                  << ": " << tokenKindName(tok);
-
-        if (tok == toy::tok_identifier)
-            std::cout << "  (text = \"" << lexer.getId().str() << "\")";
-        else if (tok == toy::tok_number)
-            std::cout << "  (value = " << lexer.getValue() << ")";
-
-        std::cout << "\n";
-    }
-
-    std::cout << "==> reached tok_eof; tokenization done.\n";
-    return 0;
+  return 0;
 }

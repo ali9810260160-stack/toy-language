@@ -1,4 +1,5 @@
 #include "toy/Lexer.h"
+#include "include/toy/AST.h"
 
 #include <iostream>
 #include <string>

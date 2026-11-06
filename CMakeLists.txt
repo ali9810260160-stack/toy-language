@@ -28,7 +28,8 @@ add_definitions(${LLVM_DEFINITIONS})
 
 
 add_executable(toyc-ch1 main.cpp
-        include/toy/lexer.h)
+        include/toy/lexer.h
+        include/toy/AST.h)
 
 
 llvm_update_compile_flags(toyc-ch1)

@@ -13,15 +13,16 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <cstring>
 
 namespace toy {
     struct Location {
         std::shared_ptr<std::string> file;
         int line;
-        int column;
+        int col;
     };
 
-    enum token : int {
+    enum Token : int {
         tok_semicolon = ';',
         tok_parenthese_open = '(',
         tok_parenthese_close = ')',

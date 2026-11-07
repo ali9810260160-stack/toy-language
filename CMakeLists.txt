@@ -58,4 +58,9 @@ mlir_tablegen(include/toy/Dialect.h.inc -gen-dialect-decls)
 mlir_tablegen(include/toy/Dialect.cpp.inc -gen-dialect-defs)
 add_public_tablegen_target(MLIRToyOpsIncGen)
 
+set(LLVM_TARGET_DEFINITIONS include/toy/ToyCombine.td)
+mlir_tablegen(ToyCombine.inc -gen-rewriters)
+add_public_tablegen_target(MLIRToyCombineIncGen)
+
 add_dependencies(toyc-ch3 MLIRToyOpsIncGen)
+add_dependencies(toyc-ch3 MLIRToyCombineIncGen)

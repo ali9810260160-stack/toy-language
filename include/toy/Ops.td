@@ -149,6 +149,7 @@ def ReshapeOp : Toy_Op<"reshape", [Pure]> {
   let results = (outs StaticShapeTensorOf<[F64]>);
 
   let assemblyFormat = [{ `(`$input`:`type($input)`)` attr-dict `to` type(results) }];
+  let hasCanonicalizer = 1;
 }
 
 // =============================================================================

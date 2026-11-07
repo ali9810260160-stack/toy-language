@@ -6,6 +6,11 @@
 using namespace mlir;
 using namespace toy;
 
+namespace {
+/// تزریق الگوهای تولیدشده از TableGen (DRR)
+#include "ToyCombine.inc"
+} // namespace
+
 /// الگوی بازنویسی به زبان C++ برای TransposeOp
 /// این الگو سناریوی زیر را بهینه‌سازی و ساده‌سازی می‌کند:
 /// transpose(transpose(x)) -> x
@@ -39,4 +44,11 @@ struct SimplifyRedundantTranspose : public mlir::OpRewritePattern<TransposeOp> {
 void TransposeOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                               MLIRContext *context) {
   results.add<SimplifyRedundantTranspose>(context);
+}
+
+/// ثبت الگوهای اعلانی (DRR) کانونیکالایزیشن برای ReshapeOp
+void ReshapeOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                            MLIRContext *context) {
+  results.add<ReshapeReshapeOptPattern, RedundantReshapeOptPattern,
+              FoldConstantReshapeOptPattern>(context);
 }

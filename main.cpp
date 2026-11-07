@@ -8,6 +8,8 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Parser/Parser.h"
+#include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/Passes.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/CommandLine.h"
@@ -46,6 +48,8 @@ static cl::opt<enum Action> emitAction(
     cl::values(clEnumValN(DumpAST, "ast", "output the AST dump")),
     cl::values(clEnumValN(DumpMLIR, "mlir", "output the MLIR dump")));
 
+static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
+
 /// بارگذاری و پارس فایل ورودی به درخت نحو (AST)
 static std::unique_ptr<toy::ModuleAST> parseInputFile(llvm::StringRef filename) {
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
@@ -81,35 +85,45 @@ static int dumpMLIR() {
   // بارگذاری دیالکت اختصاصی Toy در کانتکست MLIR
   context.getOrLoadDialect<mlir::toy::ToyDialect>();
 
+  mlir::OwningOpRef<mlir::ModuleOp> module;
+
   // حالت ورودی فایل متنی Toy
   if (inputType != InputType::MLIR &&
       !llvm::StringRef(inputFilename).ends_with(".mlir")) {
     auto moduleAST = parseInputFile(inputFilename);
     if (!moduleAST)
       return 6;
-    mlir::OwningOpRef<mlir::ModuleOp> module = mlirGen(context, *moduleAST);
+    module = mlirGen(context, *moduleAST);
     if (!module)
       return 1;
+  } else {
+    // حالت ورودی مستقیم فایل متنی MLIR (.mlir)
+    llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
+        llvm::MemoryBuffer::getFileOrSTDIN(inputFilename);
+    if (std::error_code ec = fileOrErr.getError()) {
+      llvm::errs() << "Could not open input file: " << ec.message() << "\n";
+      return -1;
+    }
 
-    module->dump();
-    return 0;
+    llvm::SourceMgr sourceMgr;
+    sourceMgr.AddNewSourceBuffer(std::move(*fileOrErr), llvm::SMLoc());
+    module = mlir::parseSourceFile<mlir::ModuleOp>(sourceMgr, &context);
+    if (!module) {
+      llvm::errs() << "Error can't load file " << inputFilename << "\n";
+      return 3;
+    }
   }
 
-  // حالت ورودی مستقیم فایل متنی MLIR (.mlir)
-  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
-      llvm::MemoryBuffer::getFileOrSTDIN(inputFilename);
-  if (std::error_code ec = fileOrErr.getError()) {
-    llvm::errs() << "Could not open input file: " << ec.message() << "\n";
-    return -1;
-  }
+  // اجرای خط لوله‌ی بهینه‌سازی و کانونی‌سازی در صورت فعال بودن فلگ opt
+  if (enableOpt) {
+    mlir::PassManager pm(module.get()->getName());
+    if (mlir::failed(mlir::applyPassManagerCLOptions(pm)))
+      return 4;
 
-  llvm::SourceMgr sourceMgr;
-  sourceMgr.AddNewSourceBuffer(std::move(*fileOrErr), llvm::SMLoc());
-  mlir::OwningOpRef<mlir::ModuleOp> module =
-      mlir::parseSourceFile<mlir::ModuleOp>(sourceMgr, &context);
-  if (!module) {
-    llvm::errs() << "Error can't load file " << inputFilename << "\n";
-    return 3;
+    // اعمال پاس استاندارد کانونیکالایزر روی تمامی توابع
+    pm.addNestedPass<mlir::toy::FuncOp>(mlir::createCanonicalizerPass());
+    if (mlir::failed(pm.run(*module)))
+      return 4;
   }
 
   module->dump();
@@ -120,6 +134,7 @@ int main(int argc, char **argv) {
   // رجیستر کردن فلگ‌های استاندارد MLIR
   mlir::registerAsmPrinterCLOptions();
   mlir::registerMLIRContextCLOptions();
+  mlir::registerPassManagerCLOptions();
   cl::ParseCommandLineOptions(argc, argv, "toy compiler\n");
 
   switch (emitAction) {

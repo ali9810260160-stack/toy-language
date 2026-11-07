@@ -185,6 +185,7 @@ def TransposeOp : Toy_Op<"transpose", [Pure]> {
   ];
 
   let assemblyFormat = [{ `(`$input`:`type($input)`)` attr-dict `to` type(results) }];
+  let hasCanonicalizer = 1;
   let hasVerifier = 1;
 }
 

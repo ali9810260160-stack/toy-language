@@ -2,15 +2,12 @@ cmake_minimum_required(VERSION 3.20.0)
 
 project(my-toy LANGUAGES CXX C)
 
-
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
 
 find_package(MLIR REQUIRED CONFIG)
 
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
-
 
 list(APPEND CMAKE_MODULE_PATH ${MLIR_CMAKE_DIR} ${LLVM_CMAKE_DIR})
 
@@ -26,11 +23,9 @@ include_directories(${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS})
 
 include_directories(include)
 
-
 add_definitions(${LLVM_DEFINITIONS})
 
-
-add_executable(toyc-ch2 main.cpp
+add_executable(toyc-ch3 main.cpp
         include/toy/lexer.h
         include/toy/AST.h
         include/toy/Parser.h
@@ -38,11 +33,12 @@ add_executable(toyc-ch2 main.cpp
         include/toy/Dialect.h
         Dialect.cpp
         include/toy/MLIRGen.h
-        MLIRGen.cpp)
+        MLIRGen.cpp
+        ToyCombine.cpp)
 
-llvm_update_compile_flags(toyc-ch2)
+llvm_update_compile_flags(toyc-ch3)
 
-target_link_libraries(toyc-ch2
+target_link_libraries(toyc-ch3
         PRIVATE
         LLVMSupport
         MLIRIR
@@ -51,6 +47,8 @@ target_link_libraries(toyc-ch2
         MLIRParser
         MLIRSupport
         MLIRAnalysis
+        MLIRPass
+        MLIRTransforms
 )
 
 set(LLVM_TARGET_DEFINITIONS include/toy/Ops.td)
@@ -60,4 +58,4 @@ mlir_tablegen(include/toy/Dialect.h.inc -gen-dialect-decls)
 mlir_tablegen(include/toy/Dialect.cpp.inc -gen-dialect-defs)
 add_public_tablegen_target(MLIRToyOpsIncGen)
 
-add_dependencies(toyc-ch2 MLIRToyOpsIncGen)
+add_dependencies(toyc-ch3 MLIRToyOpsIncGen)

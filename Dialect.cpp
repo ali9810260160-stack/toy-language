@@ -2,7 +2,10 @@
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Interfaces/CastInterfaces.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
+#include "toy/ShapeInferenceInterface.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -53,7 +56,54 @@ void ConstantOp::print(OpAsmPrinter &p) {
 }
 
 // -----------------------------------------------------------------------------
-// ۳. ReturnOp: verify
+// ۳. AddOp و MulOp: inferShapes
+// -----------------------------------------------------------------------------
+void AddOp::inferShapes() { getResult().setType(getLhs().getType()); }
+
+void MulOp::inferShapes() { getResult().setType(getLhs().getType()); }
+
+// -----------------------------------------------------------------------------
+// ۴. CastOp: inferShapes و areCastCompatible
+// -----------------------------------------------------------------------------
+void CastOp::inferShapes() { getResult().setType(getInput().getType()); }
+
+bool CastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
+  if (inputs.size() != 1 || outputs.size() != 1)
+    return false;
+  TensorType input = llvm::dyn_cast<TensorType>(inputs.front());
+  TensorType output = llvm::dyn_cast<TensorType>(outputs.front());
+  if (!input || !output || input.getElementType() != output.getElementType())
+    return false;
+  return !input.hasRank() || !output.hasRank() || input == output;
+}
+
+// -----------------------------------------------------------------------------
+// ۵. GenericCallOp: build و پیاده‌سازی متدهای CallOpInterface
+// -----------------------------------------------------------------------------
+void GenericCallOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                          StringRef callee, ArrayRef<mlir::Value> arguments) {
+  state.addTypes(UnrankedTensorType::get(builder.getF64Type()));
+  state.addOperands(arguments);
+  state.addAttribute("callee",
+                     mlir::SymbolRefAttr::get(builder.getContext(), callee));
+}
+
+CallInterfaceCallable GenericCallOp::getCallableForCallee() {
+  return (*this)->getAttrOfType<SymbolRefAttr>("callee");
+}
+
+void GenericCallOp::setCalleeFromCallable(CallInterfaceCallable callee) {
+  (*this)->setAttr("callee", cast<SymbolRefAttr>(callee));
+}
+
+Operation::operand_range GenericCallOp::getArgOperands() { return getInputs(); }
+
+MutableOperandRange GenericCallOp::getArgOperandsMutable() {
+  return getInputsMutable();
+}
+
+// -----------------------------------------------------------------------------
+// ۶. ReturnOp: verify
 // -----------------------------------------------------------------------------
 LogicalResult ReturnOp::verify() {
   auto function = cast<FuncOp>((*this)->getParentOp());
@@ -70,12 +120,18 @@ LogicalResult ReturnOp::verify() {
 }
 
 // -----------------------------------------------------------------------------
-// ۴. TransposeOp: build, verify
+// ۷. TransposeOp: build, verify, inferShapes
 // -----------------------------------------------------------------------------
 void TransposeOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
                         mlir::Value value) {
   state.addTypes(UnrankedTensorType::get(builder.getF64Type()));
   state.addOperands(value);
+}
+
+void TransposeOp::inferShapes() {
+  auto arrayTy = llvm::cast<RankedTensorType>(getInput().getType());
+  SmallVector<int64_t, 2> dims(llvm::reverse(arrayTy.getShape()));
+  getResult().setType(RankedTensorType::get(dims, arrayTy.getElementType()));
 }
 
 LogicalResult TransposeOp::verify() {
@@ -98,7 +154,7 @@ LogicalResult TransposeOp::verify() {
 }
 
 // -----------------------------------------------------------------------------
-// ۵. FuncOp: build, parse, print
+// ۸. FuncOp: build, parse, print
 // -----------------------------------------------------------------------------
 void FuncOp::build(OpBuilder &builder, OperationState &state, StringRef name,
                    FunctionType type, ArrayRef<NamedAttribute> attrs) {

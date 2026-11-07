@@ -44,6 +44,8 @@ target_link_libraries(toyc-ch3
         MLIRIR
         MLIRFunctionInterfaces
         MLIRSideEffectInterfaces
+        MLIRCallInterfaces
+        MLIRCastInterfaces
         MLIRParser
         MLIRSupport
         MLIRAnalysis
@@ -51,12 +53,18 @@ target_link_libraries(toyc-ch3
         MLIRTransforms
 )
 
+set(LLVM_TARGET_DEFINITIONS include/toy/ShapeInferenceInterface.td)
+mlir_tablegen(include/toy/ShapeInferenceOpInterfaces.h.inc -gen-op-interface-decls)
+mlir_tablegen(include/toy/ShapeInferenceOpInterfaces.cpp.inc -gen-op-interface-defs)
+add_public_tablegen_target(MLIRToyShapeInferenceInterfaceIncGen)
+
 set(LLVM_TARGET_DEFINITIONS include/toy/Ops.td)
 mlir_tablegen(include/toy/Ops.h.inc -gen-op-decls)
 mlir_tablegen(include/toy/Ops.cpp.inc -gen-op-defs)
 mlir_tablegen(include/toy/Dialect.h.inc -gen-dialect-decls)
 mlir_tablegen(include/toy/Dialect.cpp.inc -gen-dialect-defs)
 add_public_tablegen_target(MLIRToyOpsIncGen)
+add_dependencies(MLIRToyOpsIncGen MLIRToyShapeInferenceInterfaceIncGen)
 
 set(LLVM_TARGET_DEFINITIONS include/toy/ToyCombine.td)
 mlir_tablegen(ToyCombine.inc -gen-rewriters)
@@ -64,3 +72,4 @@ add_public_tablegen_target(MLIRToyCombineIncGen)
 
 add_dependencies(toyc-ch3 MLIRToyOpsIncGen)
 add_dependencies(toyc-ch3 MLIRToyCombineIncGen)
+add_dependencies(toyc-ch3 MLIRToyShapeInferenceInterfaceIncGen)

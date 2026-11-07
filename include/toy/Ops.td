@@ -4,7 +4,10 @@
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/FunctionInterfaces.td"
 include "mlir/IR/SymbolInterfaces.td"
+include "mlir/Interfaces/CallInterfaces.td"
+include "mlir/Interfaces/CastInterfaces.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
+include "toy/ShapeInferenceInterface.td"
 
 // -----------------------------------------------------------------------------
 // تعریف دیالکت Toy
@@ -49,7 +52,8 @@ def ConstantOp : Toy_Op<"constant", [Pure]> {
 // =============================================================================
 // ۲ و ۳. AddOp و MulOp
 // =============================================================================
-def AddOp : Toy_Op<"add", [Pure]> {
+def AddOp : Toy_Op<"add",
+    [Pure, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>]> {
   let summary = "Addition operation";
   let arguments = (ins F64Tensor:$lhs, F64Tensor:$rhs);
   let results = (outs F64Tensor);
@@ -64,7 +68,8 @@ def AddOp : Toy_Op<"add", [Pure]> {
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `,` type($rhs) `to` type(results)";
 }
 
-def MulOp : Toy_Op<"mul", [Pure]> {
+def MulOp : Toy_Op<"mul",
+    [Pure, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>]> {
   let summary = "Multiplication operation";
   let arguments = (ins F64Tensor:$lhs, F64Tensor:$rhs);
   let results = (outs F64Tensor);
@@ -80,18 +85,42 @@ def MulOp : Toy_Op<"mul", [Pure]> {
 }
 
 // =============================================================================
-// ۴. GenericCallOp: فراخوانی تابع
+// ۴. CastOp: تبدیل شکل تانسور
 // =============================================================================
-def GenericCallOp : Toy_Op<"generic_call"> {
+def CastOp : Toy_Op<"cast", [
+     DeclareOpInterfaceMethods<CastOpInterface>,
+     DeclareOpInterfaceMethods<ShapeInferenceOpInterface>,
+     Pure,
+     SameOperandsAndResultShape
+  ]> {
+  let summary = "shape cast operation";
+  let description = [{
+    The "cast" operation converts a tensor from one type to an equivalent type
+    without changing any data elements.
+  }];
+
+  let arguments = (ins F64Tensor:$input);
+  let results = (outs F64Tensor:$output);
+
+  let assemblyFormat = "$input attr-dict `:` type($input) `to` type($output)";
+}
+
+// =============================================================================
+// ۵. GenericCallOp: فراخوانی تابع
+// =============================================================================
+def GenericCallOp : Toy_Op<"generic_call",
+    [DeclareOpInterfaceMethods<CallOpInterface>]> {
   let summary = "Generic call operation";
-  let arguments = (ins FlatSymbolRefAttr:$callee, Variadic<F64Tensor>:$inputs);
+  let arguments = (ins
+    FlatSymbolRefAttr:$callee,
+    Variadic<F64Tensor>:$inputs,
+    OptionalAttr<DictArrayAttr>:$arg_attrs,
+    OptionalAttr<DictArrayAttr>:$res_attrs
+  );
   let results = (outs F64Tensor);
 
   let builders = [
-    OpBuilder<(ins "StringRef":$callee, "ArrayRef<Value>":$arguments), [{
-      build($_builder, $_state, UnrankedTensorType::get($_builder.getF64Type()),
-            callee, arguments);
-    }]>
+    OpBuilder<(ins "StringRef":$callee, "ArrayRef<Value>":$arguments)>
   ];
 
   let assemblyFormat = [{
@@ -100,7 +129,7 @@ def GenericCallOp : Toy_Op<"generic_call"> {
 }
 
 // =============================================================================
-// ۵. FuncOp: تعریف تابع
+// ۶. FuncOp: تعریف تابع
 // =============================================================================
 def FuncOp : Toy_Op<"func", [FunctionOpInterface, IsolatedFromAbove]> {
   let summary = "User defined function.";
@@ -115,7 +144,6 @@ def FuncOp : Toy_Op<"func", [FunctionOpInterface, IsolatedFromAbove]> {
 
   let regions = (region AnyRegion:$body);
 
-  // توجه: اینجا فقط اعلان سازنده است. بدنه آن در Dialect.cpp نوشته می‌شود.
   let builders = [
     OpBuilder<(ins "StringRef":$name, "FunctionType":$type,
       CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs)>
@@ -132,7 +160,7 @@ def FuncOp : Toy_Op<"func", [FunctionOpInterface, IsolatedFromAbove]> {
 }
 
 // =============================================================================
-// ۶. PrintOp
+// ۷. PrintOp
 // =============================================================================
 def PrintOp : Toy_Op<"print"> {
   let summary = "Print operation";
@@ -141,7 +169,7 @@ def PrintOp : Toy_Op<"print"> {
 }
 
 // =============================================================================
-// ۷. ReshapeOp
+// ۸. ReshapeOp
 // =============================================================================
 def ReshapeOp : Toy_Op<"reshape", [Pure]> {
   let summary = "Reshape operation";
@@ -153,7 +181,7 @@ def ReshapeOp : Toy_Op<"reshape", [Pure]> {
 }
 
 // =============================================================================
-// ۸. ReturnOp
+// ۹. ReturnOp
 // =============================================================================
 def ReturnOp : Toy_Op<"return", [Pure, HasParent<"FuncOp">, Terminator]> {
   let summary = "Return operation";
@@ -174,9 +202,10 @@ def ReturnOp : Toy_Op<"return", [Pure, HasParent<"FuncOp">, Terminator]> {
 }
 
 // =============================================================================
-// ۹. TransposeOp
+// ۱۰. TransposeOp
 // =============================================================================
-def TransposeOp : Toy_Op<"transpose", [Pure]> {
+def TransposeOp : Toy_Op<"transpose",
+    [Pure, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>]> {
   let summary = "Transpose operation";
   let arguments = (ins F64Tensor:$input);
   let results = (outs F64Tensor);

@@ -29,7 +29,7 @@ void ConstantOp::build(OpBuilder &builder, OperationState &state, double value) 
   auto dataAttribute = DenseElementsAttr::get(dataType, value);
   ConstantOp::build(builder, state, dataType, dataAttribute);
 }
-// -----------------------------------------------------------------------------
+
 LogicalResult ConstantOp::verify() {
   auto type = getType();
   auto attrType = getValue().getType();
@@ -70,8 +70,14 @@ LogicalResult ReturnOp::verify() {
 }
 
 // -----------------------------------------------------------------------------
-// ۴. TransposeOp: verify
+// ۴. TransposeOp: build, verify
 // -----------------------------------------------------------------------------
+void TransposeOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                        mlir::Value value) {
+  state.addTypes(UnrankedTensorType::get(builder.getF64Type()));
+  state.addOperands(value);
+}
+
 LogicalResult TransposeOp::verify() {
   auto inputType = llvm::dyn_cast<RankedTensorType>(getInput().getType());
   auto resultType = llvm::dyn_cast<RankedTensorType>(getType());
@@ -96,19 +102,7 @@ LogicalResult TransposeOp::verify() {
 // -----------------------------------------------------------------------------
 void FuncOp::build(OpBuilder &builder, OperationState &state, StringRef name,
                    FunctionType type, ArrayRef<NamedAttribute> attrs) {
-  state.addAttribute(SymbolTable::getSymbolAttrName(),
-                     builder.getStringAttr(name));
-  state.addAttribute(getFunctionTypeAttrName(state.name), TypeAttr::get(type));
-  state.attributes.append(attrs.begin(), attrs.end());
-  state.addRegion();
-
-  if (type.getNumInputs() == 0)
-    return;
-
-  Block *entryBlock = new Block();
-  state.regions.front()->push_back(entryBlock);
-  for (Type t : type.getInputs())
-    entryBlock->addArgument(t, state.location);
+  buildWithEntryBlock(builder, state, name, type, attrs, type.getInputs());
 }
 
 ParseResult FuncOp::parse(OpAsmParser &parser, OperationState &result) {

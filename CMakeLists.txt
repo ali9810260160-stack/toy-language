@@ -30,20 +30,19 @@ include_directories(include)
 add_definitions(${LLVM_DEFINITIONS})
 
 
-add_executable(toyc-ch1 main.cpp
+add_executable(toyc-ch2 main.cpp
         include/toy/lexer.h
         include/toy/AST.h
         include/toy/Parser.h
         AST.cpp
         include/toy/Dialect.h
-        Dialect.cpp)
+        Dialect.cpp
+        include/toy/MLIRGen.h
+        MLIRGen.cpp)
 
+llvm_update_compile_flags(toyc-ch2)
 
-llvm_update_compile_flags(toyc-ch1)
-
-target_link_libraries(toyc-ch1 PRIVATE LLVMSupport)
-
-target_link_libraries(toyc-ch1
+target_link_libraries(toyc-ch2
         PRIVATE
         LLVMSupport
         MLIRIR
@@ -51,6 +50,7 @@ target_link_libraries(toyc-ch1
         MLIRSideEffectInterfaces
         MLIRParser
         MLIRSupport
+        MLIRAnalysis
 )
 
 set(LLVM_TARGET_DEFINITIONS include/toy/Ops.td)
@@ -60,4 +60,4 @@ mlir_tablegen(include/toy/Dialect.h.inc -gen-dialect-decls)
 mlir_tablegen(include/toy/Dialect.cpp.inc -gen-dialect-defs)
 add_public_tablegen_target(MLIRToyOpsIncGen)
 
-add_dependencies(toyc-ch1 MLIRToyOpsIncGen)
+add_dependencies(toyc-ch2 MLIRToyOpsIncGen)

@@ -90,7 +90,7 @@ def GenericCallOp : Toy_Op<"generic_call"> {
   let builders = [
     OpBuilder<(ins "StringRef":$callee, "ArrayRef<Value>":$arguments), [{
       build($_builder, $_state, UnrankedTensorType::get($_builder.getF64Type()),
-            $_builder.getStringAttr(callee), arguments);
+            callee, arguments);
     }]>
   ];
 
@@ -164,6 +164,10 @@ def ReturnOp : Toy_Op<"return", [Pure, HasParent<"FuncOp">, Terminator]> {
     }]>
   ];
 
+  let extraClassDeclaration = [{
+    bool hasOperand() { return getNumOperands() != 0; }
+  }];
+
   let assemblyFormat = "($input^ `:` type($input))? attr-dict";
   let hasVerifier = 1;
 }
@@ -175,6 +179,11 @@ def TransposeOp : Toy_Op<"transpose", [Pure]> {
   let summary = "Transpose operation";
   let arguments = (ins F64Tensor:$input);
   let results = (outs F64Tensor);
+
+  let builders = [
+    OpBuilder<(ins "Value":$input)>
+  ];
+
   let assemblyFormat = [{ `(`$input`:`type($input)`)` attr-dict `to` type(results) }];
   let hasVerifier = 1;
 }

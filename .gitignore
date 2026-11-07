@@ -1,0 +1,5 @@
+build/
+.idea/
+*.pdb
+*.obj
+*.exe

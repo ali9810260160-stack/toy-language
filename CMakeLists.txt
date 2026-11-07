@@ -34,12 +34,24 @@ add_executable(toyc-ch1 main.cpp
         include/toy/lexer.h
         include/toy/AST.h
         include/toy/Parser.h
-        AST.cpp)
+        AST.cpp
+        include/toy/Dialect.h
+        Dialect.cpp)
 
 
 llvm_update_compile_flags(toyc-ch1)
 
 target_link_libraries(toyc-ch1 PRIVATE LLVMSupport)
+
+target_link_libraries(toyc-ch1
+        PRIVATE
+        LLVMSupport
+        MLIRIR
+        MLIRFunctionInterfaces
+        MLIRSideEffectInterfaces
+        MLIRParser
+        MLIRSupport
+)
 
 set(LLVM_TARGET_DEFINITIONS include/toy/Ops.td)
 mlir_tablegen(include/toy/Ops.h.inc -gen-op-decls)

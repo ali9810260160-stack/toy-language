@@ -127,6 +127,10 @@ private:
           function.getFunctionType().getInputs(), getType(VarType{})));
     }
 
+    // اگر تابع main نباشد، سطح دسترسی آن را private می‌کنیم تا Inliner بتواند پس از درون‌ریزی آن را حذف کند
+    if (funcAST.getProto()->getName() != "main")
+      function.setPrivate();
+
     return function;
   }
 

@@ -25,20 +25,22 @@ include_directories(include)
 
 add_definitions(${LLVM_DEFINITIONS})
 
-add_executable(toyc-ch3 main.cpp
+add_executable(toyc-ch4 main.cpp
         include/toy/lexer.h
         include/toy/AST.h
         include/toy/Parser.h
+        include/toy/Passes.h
         AST.cpp
         include/toy/Dialect.h
         Dialect.cpp
         include/toy/MLIRGen.h
         MLIRGen.cpp
-        ToyCombine.cpp)
+        ToyCombine.cpp
+        ShapeInferencePass.cpp)
 
-llvm_update_compile_flags(toyc-ch3)
+llvm_update_compile_flags(toyc-ch4)
 
-target_link_libraries(toyc-ch3
+target_link_libraries(toyc-ch4
         PRIVATE
         LLVMSupport
         MLIRIR
@@ -70,6 +72,6 @@ set(LLVM_TARGET_DEFINITIONS include/toy/ToyCombine.td)
 mlir_tablegen(ToyCombine.inc -gen-rewriters)
 add_public_tablegen_target(MLIRToyCombineIncGen)
 
-add_dependencies(toyc-ch3 MLIRToyOpsIncGen)
-add_dependencies(toyc-ch3 MLIRToyCombineIncGen)
-add_dependencies(toyc-ch3 MLIRToyShapeInferenceInterfaceIncGen)
+add_dependencies(toyc-ch4 MLIRToyOpsIncGen)
+add_dependencies(toyc-ch4 MLIRToyCombineIncGen)
+add_dependencies(toyc-ch4 MLIRToyShapeInferenceInterfaceIncGen)

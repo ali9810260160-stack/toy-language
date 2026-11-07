@@ -65,7 +65,7 @@ def AddOp : Toy_Op<"add",
     }]>
   ];
 
-  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `,` type($rhs) `to` type(results)";
+  let hasCustomAssemblyFormat = 1;
 }
 
 def MulOp : Toy_Op<"mul",
@@ -81,7 +81,7 @@ def MulOp : Toy_Op<"mul",
     }]>
   ];
 
-  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `,` type($rhs) `to` type(results)";
+  let hasCustomAssemblyFormat = 1;
 }
 
 // =============================================================================

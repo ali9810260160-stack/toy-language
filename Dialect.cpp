@@ -5,11 +5,50 @@
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/CastInterfaces.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
+#include "mlir/Transforms/InliningUtils.h"
 #include "toy/ShapeInferenceInterface.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 using namespace mlir::toy;
+
+// -----------------------------------------------------------------------------
+// اینترفیس درون‌ریزی توابع (ToyInlinerInterface)
+// -----------------------------------------------------------------------------
+struct ToyInlinerInterface : public DialectInlinerInterface {
+  using DialectInlinerInterface::DialectInlinerInterface;
+
+  /// تمام فراخوانی‌ها در دیالکت Toy قابل درون‌ریزی هستند
+  bool isLegalToInline(Operation *call, Operation *callable,
+                       bool wouldBeCloned) const final {
+    return true;
+  }
+
+  /// تمام عملگرهای درون دیالکت Toy قابل درون‌ریزی در یک ریجن هستند
+  bool isLegalToInline(Operation *, Region *, bool, IRMapping &) const final {
+    return true;
+  }
+
+  /// تمام توابع درون دیالکت Toy قابل درون‌ریزی هستند
+  bool isLegalToInline(Region *, Region *, bool, IRMapping &) const final {
+    return true;
+  }
+
+  /// مدیریت ترمیناتور (return) در زمان اینلاین کردن با جایگزینی مقادیر خروجی
+  void handleTerminator(Operation *op, ValueRange valuesToRepl) const final {
+    auto returnOp = cast<ReturnOp>(op);
+    assert(returnOp.getNumOperands() == valuesToRepl.size());
+    for (const auto &it : llvm::enumerate(returnOp.getOperands()))
+      valuesToRepl[it.index()].replaceAllUsesWith(it.value());
+  }
+
+  /// تبدیل عدم تطابق نوع در زمان اینلاینینگ با درج یک CastOp
+  Operation *materializeCallConversion(OpBuilder &builder, Value input,
+                                       Type resultType,
+                                       Location conversionLoc) const final {
+    return CastOp::create(builder, conversionLoc, resultType, input);
+  }
+};
 
 // تزریق بدنه کلاس دیالکت
 #include "toy/Dialect.cpp.inc"
@@ -22,6 +61,7 @@ void ToyDialect::initialize() {
 #define GET_OP_LIST
 #include "toy/Ops.cpp.inc"
       >();
+  addInterfaces<ToyInlinerInterface>();
 }
 
 // -----------------------------------------------------------------------------
@@ -56,11 +96,60 @@ void ConstantOp::print(OpAsmPrinter &p) {
 }
 
 // -----------------------------------------------------------------------------
-// ۳. AddOp و MulOp: inferShapes
+// ۳. AddOp و MulOp: parse, print, inferShapes
 // -----------------------------------------------------------------------------
+static mlir::ParseResult parseBinaryOp(mlir::OpAsmParser &parser,
+                                       mlir::OperationState &result) {
+  SmallVector<mlir::OpAsmParser::UnresolvedOperand, 2> operands;
+  SMLoc operandsLoc = parser.getCurrentLocation();
+  Type type;
+  if (parser.parseOperandList(operands, /*requiredOperandCount=*/2) ||
+      parser.parseOptionalAttrDict(result.attributes) ||
+      parser.parseColonType(type))
+    return mlir::failure();
+
+  if (FunctionType funcType = llvm::dyn_cast<FunctionType>(type)) {
+    if (parser.resolveOperands(operands, funcType.getInputs(), operandsLoc,
+                               result.operands))
+      return mlir::failure();
+    result.addTypes(funcType.getResults());
+    return mlir::success();
+  }
+
+  if (parser.resolveOperands(operands, type, result.operands))
+    return mlir::failure();
+  result.addTypes(type);
+  return mlir::success();
+}
+
+static void printBinaryOp(mlir::OpAsmPrinter &printer, mlir::Operation *op) {
+  printer << " " << op->getOperands();
+  printer.printOptionalAttrDict(op->getAttrs());
+  printer << " : ";
+
+  Type resultType = *op->result_type_begin();
+  if (llvm::all_of(op->getOperandTypes(),
+                   [=](Type type) { return type == resultType; })) {
+    printer << resultType;
+    return;
+  }
+
+  printer.printFunctionalType(op->getOperandTypes(), op->getResultTypes());
+}
+
 void AddOp::inferShapes() { getResult().setType(getLhs().getType()); }
+mlir::ParseResult AddOp::parse(mlir::OpAsmParser &parser,
+                               mlir::OperationState &result) {
+  return parseBinaryOp(parser, result);
+}
+void AddOp::print(mlir::OpAsmPrinter &p) { printBinaryOp(p, *this); }
 
 void MulOp::inferShapes() { getResult().setType(getLhs().getType()); }
+mlir::ParseResult MulOp::parse(mlir::OpAsmParser &parser,
+                               mlir::OperationState &result) {
+  return parseBinaryOp(parser, result);
+}
+void MulOp::print(mlir::OpAsmPrinter &p) { printBinaryOp(p, *this); }
 
 // -----------------------------------------------------------------------------
 // ۴. CastOp: inferShapes و areCastCompatible

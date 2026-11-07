@@ -3,6 +3,7 @@
 #include "toy/Lexer.h"
 #include "toy/MLIRGen.h"
 #include "toy/Parser.h"
+#include "toy/Passes.h"
 
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -120,8 +121,15 @@ static int dumpMLIR() {
     if (mlir::failed(mlir::applyPassManagerCLOptions(pm)))
       return 4;
 
-    // اعمال پاس استاندارد کانونیکالایزر روی تمامی توابع
-    pm.addNestedPass<mlir::toy::FuncOp>(mlir::createCanonicalizerPass());
+    // ۱. درون‌ریزی تمام توابع خصوصی در تابع main و حذف توابع زائد
+    pm.addPass(mlir::createInlinerPass());
+
+    // ۲. استنتاج شکل‌ها، ساده‌سازی و حذف زیرعبارت‌های مشترک (CSE)
+    mlir::OpPassManager &optPM = pm.nest<mlir::toy::FuncOp>();
+    optPM.addPass(mlir::toy::createShapeInferencePass());
+    optPM.addPass(mlir::createCanonicalizerPass());
+    optPM.addPass(mlir::createCSEPass());
+
     if (mlir::failed(pm.run(*module)))
       return 4;
   }

@@ -164,7 +164,9 @@ def FuncOp : Toy_Op<"func", [FunctionOpInterface, IsolatedFromAbove]> {
 // =============================================================================
 def PrintOp : Toy_Op<"print"> {
   let summary = "Print operation";
-  let arguments = (ins F64Tensor:$input);
+  // The print operation takes an input tensor to print.
+  // We also allow a F64MemRef to enable interop during partial lowering.
+  let arguments = (ins AnyTypeOf<[F64Tensor, F64MemRef]>:$input);
   let assemblyFormat = "$input attr-dict `:` type($input)";
 }
 

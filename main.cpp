@@ -5,6 +5,9 @@
 #include "toy/Parser.h"
 #include "toy/Passes.h"
 
+#include "mlir/Dialect/Affine/Transforms/Passes.h"
+#include "mlir/Dialect/Func/Extensions/AllExtensions.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
@@ -42,12 +45,14 @@ static cl::opt<enum InputType> inputType(
                           "load the input file as an MLIR file")));
 
 namespace {
-enum Action { None, DumpAST, DumpMLIR };
+enum Action { None, DumpAST, DumpMLIR, DumpMLIRAffine };
 } // namespace
 static cl::opt<enum Action> emitAction(
     "emit", cl::desc("Select the kind of output desired"),
     cl::values(clEnumValN(DumpAST, "ast", "output the AST dump")),
-    cl::values(clEnumValN(DumpMLIR, "mlir", "output the MLIR dump")));
+    cl::values(clEnumValN(DumpMLIR, "mlir", "output the MLIR dump")),
+    cl::values(clEnumValN(DumpMLIRAffine, "mlir-affine",
+                          "output the MLIR dump after affine lowering")));
 
 static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
 
@@ -82,7 +87,10 @@ static int dumpAST() {
 }
 
 static int dumpMLIR() {
-  mlir::MLIRContext context;
+  mlir::DialectRegistry registry;
+  mlir::func::registerAllExtensions(registry);
+
+  mlir::MLIRContext context(registry);
   // بارگذاری دیالکت اختصاصی Toy در کانتکست MLIR
   context.getOrLoadDialect<mlir::toy::ToyDialect>();
 
@@ -115,12 +123,13 @@ static int dumpMLIR() {
     }
   }
 
-  // اجرای خط لوله‌ی بهینه‌سازی و کانونی‌سازی در صورت فعال بودن فلگ opt
-  if (enableOpt) {
-    mlir::PassManager pm(module.get()->getName());
-    if (mlir::failed(mlir::applyPassManagerCLOptions(pm)))
-      return 4;
+  mlir::PassManager pm(module.get()->getName());
+  if (mlir::failed(mlir::applyPassManagerCLOptions(pm)))
+    return 4;
 
+  bool isLoweringToAffine = emitAction >= Action::DumpMLIRAffine;
+
+  if (enableOpt || isLoweringToAffine) {
     // ۱. درون‌ریزی تمام توابع خصوصی در تابع main و حذف توابع زائد
     pm.addPass(mlir::createInlinerPass());
 
@@ -129,10 +138,26 @@ static int dumpMLIR() {
     optPM.addPass(mlir::toy::createShapeInferencePass());
     optPM.addPass(mlir::createCanonicalizerPass());
     optPM.addPass(mlir::createCSEPass());
-
-    if (mlir::failed(pm.run(*module)))
-      return 4;
   }
+
+  if (isLoweringToAffine) {
+    // ۳. تبدیل جزئی دیالکت Toy به Affine و MemRef
+    pm.addPass(mlir::toy::createLowerToAffinePass());
+
+    // ۴. پاک‌سازی پس از پایین‌آوردن سطح (روی توابع استاندارد func.func)
+    mlir::OpPassManager &optPM = pm.nest<mlir::func::FuncOp>();
+    optPM.addPass(mlir::createCanonicalizerPass());
+    optPM.addPass(mlir::createCSEPass());
+
+    // ۵. بهینه‌سازی‌های اختصاصی دیالکت Affine در صورت فعال بودن opt
+    if (enableOpt) {
+      optPM.addPass(mlir::affine::createLoopFusionPass());
+      optPM.addPass(mlir::affine::createAffineScalarReplacementPass());
+    }
+  }
+
+  if (mlir::failed(pm.run(*module)))
+    return 4;
 
   module->dump();
   return 0;
@@ -149,9 +174,10 @@ int main(int argc, char **argv) {
   case Action::DumpAST:
     return dumpAST();
   case Action::DumpMLIR:
+  case Action::DumpMLIRAffine:
     return dumpMLIR();
   default:
-    llvm::errs() << "No action specified (use -emit=ast or -emit=mlir)\n";
+    llvm::errs() << "No action specified (use -emit=ast, -emit=mlir, or -emit=mlir-affine)\n";
     return 1;
   }
 }

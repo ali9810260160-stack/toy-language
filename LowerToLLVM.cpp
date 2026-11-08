@@ -1,7 +1,24 @@
-//===- LowerToLLVM.cpp - Lowering from Toy+Affine+Std to LLVM -------------===//
+//====- LowerToLLVM.cpp - Lowering from Toy+Affine+Std to LLVM ------------===//
 //
-// تبدیل کامل به دیالکت LLVM و کدهای میانی ماشین.
-// عملیات toy.print به حلقه‌های تودرتوی scf و فراخوانی printf تبدیل می‌شود.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// This file implements full lowering of Toy operations to LLVM MLIR dialect.
+// 'toy.print' is lowered to a loop nest that calls `printf` on each element of
+// the input array. The file also sets up the ToyToLLVMLoweringPass. This pass
+// lowers the combination of Arithmetic + Affine + SCF + Func dialects to the
+// LLVM one:
+//
+//                         Affine --
+//                                  |
+//                                  v
+//                       Arithmetic + Func --> LLVM (Dialect)
+//                                  ^
+//                                  |
+//     'toy.print' --> Loop (SCF) --
 //
 //===----------------------------------------------------------------------===//
 
@@ -38,10 +55,12 @@
 using namespace mlir;
 
 //===----------------------------------------------------------------------===//
-// الگوی تبدیل toy.print به حلقه‌های فراخوانی تابع خارجی printf
+// ToyToLLVM Conversion Patterns
 //===----------------------------------------------------------------------===//
 
 namespace {
+/// Lowers `toy.print` to a loop nest calling `printf` on each of the individual
+/// elements of the array.
 class PrintOpLowering : public OpConversionPattern<toy::PrintOp> {
 public:
   using OpConversionPattern<toy::PrintOp>::OpConversionPattern;
@@ -56,14 +75,14 @@ public:
 
     ModuleOp parentModule = op->getParentOfType<ModuleOp>();
 
-    // ثبت یا دریافت اعلان تابع خارجی printf
+    // Get a symbol reference to the printf function, inserting it if necessary.
     auto printfRef = getOrInsertPrintf(rewriter, parentModule);
     Value formatSpecifierCst = getOrCreateGlobalString(
         loc, rewriter, "frmt_spec", StringRef("%f \0", 4), parentModule);
     Value newLineCst = getOrCreateGlobalString(
         loc, rewriter, "nl", StringRef("\n\0", 2), parentModule);
 
-    // ایجاد حلقه‌های استاندارد تودرتو (scf.for) برای پیمایش ابعاد
+    // Create a loop for each of the dimensions within the shape.
     SmallVector<Value, 4> loopIvs;
     for (unsigned i = 0, e = memRefShape.size(); i != e; ++i) {
       auto lowerBound = arith::ConstantIndexOp::create(rewriter, loc, 0);
@@ -76,10 +95,10 @@ public:
         rewriter.eraseOp(&nested);
       loopIvs.push_back(loop.getInductionVar());
 
-      // خاتمه دادن به بدنه حلقه
+      // Terminate the loop body.
       rewriter.setInsertionPointToEnd(loop.getBody());
 
-      // چاپ خط جدید پس از پایان هر بعد داخلی
+      // Insert a newline after each of the inner dimensions of the shape.
       if (i != e - 1)
         LLVM::CallOp::create(rewriter, loc, getPrintfType(context), printfRef,
                              newLineCst);
@@ -87,18 +106,20 @@ public:
       rewriter.setInsertionPointToStart(loop.getBody());
     }
 
-    // لود کردن المان فعلی از بافر و فراخوانی printf
+    // Generate a call to printf for the current element of the loop.
     auto elementLoad =
         memref::LoadOp::create(rewriter, loc, op.getInput(), loopIvs);
     LLVM::CallOp::create(rewriter, loc, getPrintfType(context), printfRef,
                          ArrayRef<Value>({formatSpecifierCst, elementLoad}));
 
+    // Notify the rewriter that this operation has been removed.
     rewriter.eraseOp(op);
     return success();
   }
 
 private:
-  /// تعریف امضای تابع printf: i32 (ptr, ...)
+  /// Create a function declaration for printf, the signature is:
+  ///   * `i32 (i8*, ...)`
   static LLVM::LLVMFunctionType getPrintfType(MLIRContext *context) {
     auto llvmI32Ty = IntegerType::get(context, 32);
     auto llvmPtrTy = LLVM::LLVMPointerType::get(context);
@@ -107,13 +128,15 @@ private:
     return llvmFnType;
   }
 
-  /// تعریف تابع printf درون ModuleOp در صورت عدم وجود
+  /// Return a symbol reference to the printf function, inserting it into the
+  /// module if necessary.
   static FlatSymbolRefAttr getOrInsertPrintf(PatternRewriter &rewriter,
                                              ModuleOp module) {
     auto *context = module.getContext();
     if (module.lookupSymbol<LLVM::LLVMFuncOp>("printf"))
       return SymbolRefAttr::get(context, "printf");
 
+    // Insert the printf function into the body of the parent module.
     PatternRewriter::InsertionGuard insertGuard(rewriter);
     rewriter.setInsertionPointToStart(module.getBody());
     LLVM::LLVMFuncOp::create(rewriter, module.getLoc(), "printf",
@@ -121,10 +144,12 @@ private:
     return SymbolRefAttr::get(context, "printf");
   }
 
-  /// ایجاد رشته سراسری (Global String) مثل فرمت چاپ "%f "
+  /// Return a value representing an access into a global string with the given
+  /// name, creating the string if necessary.
   static Value getOrCreateGlobalString(Location loc, OpBuilder &builder,
                                        StringRef name, StringRef value,
                                        ModuleOp module) {
+    // Create the global at the entry of the module.
     LLVM::GlobalOp global;
     if (!(global = module.lookupSymbol<LLVM::GlobalOp>(name))) {
       OpBuilder::InsertionGuard insertGuard(builder);
@@ -137,6 +162,7 @@ private:
                                       /*alignment=*/0);
     }
 
+    // Get the pointer to the first character in the global string.
     Value globalPtr = LLVM::AddressOfOp::create(builder, loc, global);
     Value cst0 = LLVM::ConstantOp::create(builder, loc, builder.getI64Type(),
                                           builder.getIndexAttr(0));
@@ -148,7 +174,7 @@ private:
 } // namespace
 
 //===----------------------------------------------------------------------===//
-// پاس تبدیل جامع به LLVM
+// ToyToLLVMLoweringPass
 //===----------------------------------------------------------------------===//
 
 namespace {
@@ -165,26 +191,49 @@ struct ToyToLLVMLoweringPass
 } // namespace
 
 void ToyToLLVMLoweringPass::runOnOperation() {
+  // The first thing to define is the conversion target. This will define the
+  // final target for this lowering. For this lowering, we are only targeting
+  // the LLVM dialect.
   LLVMConversionTarget target(getContext());
   target.addLegalOp<ModuleOp>();
 
+  // During this lowering, we will also be lowering the MemRef types, that are
+  // currently being operated on, to a representation in LLVM. To perform this
+  // conversion we use a TypeConverter as part of the lowering. This converter
+  // details how one type maps to another. This is necessary now that we will be
+  // doing more complicated lowerings, involving loop region arguments.
   LLVMTypeConverter typeConverter(&getContext());
 
+  // Now that the conversion target has been defined, we need to provide the
+  // patterns used for lowering. At this point of the compilation process, we
+  // have a combination of `toy`, `affine`, and `std` operations. Luckily, there
+  // are already exists a set of patterns to transform `affine` and `std`
+  // dialects. These patterns lowering in multiple stages, relying on transitive
+  // lowerings. Transitive lowering, or A->B->C lowering, is when multiple
+  // patterns must be applied to fully transform an illegal operation into a
+  // set of legal ones.
   RewritePatternSet patterns(&getContext());
   populateAffineToStdConversionPatterns(patterns);
   populateSCFToControlFlowConversionPatterns(patterns);
   mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
   populateFinalizeMemRefToLLVMConversionPatterns(typeConverter, patterns);
   cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns);
+  cf::populateAssertToLLVMConversionPattern(typeConverter, patterns);
   populateFuncToLLVMConversionPatterns(typeConverter, patterns);
 
+  // The only remaining operation to lower from the `toy` dialect, is the
+  // PrintOp.
   patterns.add<PrintOpLowering>(&getContext());
 
+  // We want to completely lower to LLVM, so we use a `FullConversion`. This
+  // ensures that only legal operations will remain after the conversion.
   auto module = getOperation();
   if (failed(applyFullConversion(module, target, std::move(patterns))))
     signalPassFailure();
 }
 
+/// Create a pass for lowering operations the remaining `Toy` operations, as
+/// well as `Affine` and `Std`, to the LLVM dialect for codegen.
 std::unique_ptr<mlir::Pass> mlir::toy::createLowerToLLVMPass() {
   return std::make_unique<ToyToLLVMLoweringPass>();
 }

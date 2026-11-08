@@ -1,7 +1,14 @@
-//===- LowerToAffineLoops.cpp - Partial lowering from Toy to Affine+Std ---===//
+//====- LowerToAffineLoops.cpp - Partial lowering from Toy to Affine+Std --===//
 //
-// پیاده‌سازی تبدیل جزئی (Partial Lowering) دیالکت Toy به ترکیبی از
-// حلقه‌های Affine، حافظه‌های MemRef و عملیات استاندارد حسابی (Arith و Func).
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// This file implements a partial lowering of Toy operations to a combination of
+// affine loops, memref operations and standard operations. This lowering
+// expects that all calls have been inlined, and all shapes have been resolved.
 //
 //===----------------------------------------------------------------------===//
 
@@ -37,61 +44,70 @@
 using namespace mlir;
 
 //===----------------------------------------------------------------------===//
-// ToyToAffine توابع کمکی
+// ToyToAffine Conversion Patterns
 //===----------------------------------------------------------------------===//
 
-/// تبدیل RankedTensorType به نوع معادل آن در بافر فیزیکی حافظه: MemRefType
+/// Convert the given RankedTensorType into the corresponding MemRefType.
 static MemRefType convertTensorToMemRef(RankedTensorType type) {
   return MemRefType::get(type.getShape(), type.getElementType());
 }
 
-/// تخصیص حافظه (memref.alloc) در ابتدای بلاک و آزادسازی آن (memref.dealloc) در انتهای بلاک
+/// Insert an allocation and deallocation for the given MemRefType.
 static Value insertAllocAndDealloc(MemRefType type, Location loc,
                                    PatternRewriter &rewriter) {
   auto alloc = memref::AllocOp::create(rewriter, loc, type);
 
-  // اطمینان از قرار گرفتن تخصیص در ابتدای بلاک جاری
+  // Make sure to allocate at the beginning of the block.
   auto *parentBlock = alloc->getBlock();
   alloc->moveBefore(&parentBlock->front());
 
-  // درج آزادسازی در انتهای بلاک جاری (چون توابع Toy انشعاب پیچیده ندارند)
+  // Make sure to deallocate this alloc at the end of the block. This is fine
+  // as toy functions have no control flow.
   auto dealloc = memref::DeallocOp::create(rewriter, loc, alloc);
   dealloc->moveBefore(&parentBlock->back());
   return alloc;
 }
 
-/// تابعی که رفتار محاسباتی درون عمیق‌ترین سطح حلقه را توصیف می‌کند
+/// This defines the function type used to process an iteration of a lowered
+/// loop. It takes as input an OpBuilder and the range of loop induction
+/// variables for the iteration. It returns a value to store at the current
+/// index of the iteration.
 using LoopIterationFn =
     function_ref<Value(OpBuilder &rewriter, ValueRange loopIvs)>;
 
-/// ایجاد حلقه‌های تودرتوی چندبعدی Affine متناظر با ابعاد تانسور خروجی
 static void lowerOpToLoops(Operation *op, PatternRewriter &rewriter,
                            LoopIterationFn processIteration) {
   auto tensorType = llvm::cast<RankedTensorType>((*op->result_type_begin()));
   auto loc = op->getLoc();
 
-  // تخصیص و آزادسازی بافر خروجی
+  // Insert an allocation and deallocation for the result of this operation.
   auto memRefType = convertTensorToMemRef(tensorType);
   auto alloc = insertAllocAndDealloc(memRefType, loc, rewriter);
 
-  // تولید حلقه‌های تودرتو (یک حلقه به ازای هر بعد)
+  // Create a nest of affine loops, with one loop per dimension of the shape.
+  // The buildAffineLoopNest function takes a callback that is used to construct
+  // the body of the innermost loop given a builder, a location and a range of
+  // loop induction variables.
   SmallVector<int64_t, 4> lowerBounds(tensorType.getRank(), /*Value=*/0);
   SmallVector<int64_t, 4> steps(tensorType.getRank(), /*Value=*/1);
   affine::buildAffineLoopNest(
       rewriter, loc, lowerBounds, tensorType.getShape(), steps,
       [&](OpBuilder &nestedBuilder, Location loc, ValueRange ivs) {
+        // Call the processing function with the rewriter
+        // and the loop induction variables. This function will return the value
+        // to store at the current index.
         Value valueToStore = processIteration(nestedBuilder, ivs);
         affine::AffineStoreOp::create(nestedBuilder, loc, valueToStore, alloc,
                                       ivs);
       });
 
-  // جایگزینی عملگر با تخصیص حافظه خروجی
+  // Replace this operation with the generated alloc.
   rewriter.replaceOp(op, alloc);
 }
 
 namespace {
 //===----------------------------------------------------------------------===//
-// الگوهای تبدیل: عملیات دودویی (AddOp و MulOp)
+// ToyToAffine Conversion Patterns: Binary operations
 //===----------------------------------------------------------------------===//
 
 template <typename BinaryOp, typename LoweredBinaryOp>
@@ -104,13 +120,15 @@ struct BinaryOpLowering : public OpConversionPattern<BinaryOp> {
                   ConversionPatternRewriter &rewriter) const final {
     auto loc = op->getLoc();
     lowerOpToLoops(op, rewriter, [&](OpBuilder &builder, ValueRange loopIvs) {
-      // لود کردن المان‌های متناظر از دو عملوند ورودی
+      // Generate loads for the element of 'lhs' and 'rhs' at the
+      // inner loop.
       auto loadedLhs =
           affine::AffineLoadOp::create(builder, loc, adaptor.getLhs(), loopIvs);
       auto loadedRhs =
           affine::AffineLoadOp::create(builder, loc, adaptor.getRhs(), loopIvs);
 
-      // انجام محاسبه اسکالر (arith.addf یا arith.mulf)
+      // Create the binary operation performed on the loaded
+      // values.
       return LoweredBinaryOp::create(builder, loc, loadedLhs, loadedRhs);
     });
     return success();
@@ -120,7 +138,7 @@ using AddOpLowering = BinaryOpLowering<toy::AddOp, arith::AddFOp>;
 using MulOpLowering = BinaryOpLowering<toy::MulOp, arith::MulFOp>;
 
 //===----------------------------------------------------------------------===//
-// الگوهای تبدیل: ثابت‌ها (ConstantOp)
+// ToyToAffine Conversion Patterns: Constant operations
 //===----------------------------------------------------------------------===//
 
 struct ConstantOpLowering : public OpConversionPattern<toy::ConstantOp> {
@@ -132,11 +150,15 @@ struct ConstantOpLowering : public OpConversionPattern<toy::ConstantOp> {
     DenseElementsAttr constantValue = op.getValue();
     Location loc = op.getLoc();
 
+    // When lowering the constant operation, we allocate and assign the constant
+    // values to a corresponding memref allocation.
     auto tensorType = llvm::cast<RankedTensorType>(op.getType());
     auto memRefType = convertTensorToMemRef(tensorType);
     auto alloc = insertAllocAndDealloc(memRefType, loc, rewriter);
 
-    // پیش‌تولید اندیس‌های ثابت به منظور جلوگیری از تکرار کد
+    // We will be generating constant indices up-to the largest dimension.
+    // Create these constants up-front to avoid large amounts of redundant
+    // operations.
     auto valueShape = memRefType.getShape();
     SmallVector<Value, 8> constantIndices;
 
@@ -145,14 +167,20 @@ struct ConstantOpLowering : public OpConversionPattern<toy::ConstantOp> {
         constantIndices.push_back(
             arith::ConstantIndexOp::create(rewriter, loc, i));
     } else {
+      // This is the case of a tensor of rank 0.
       constantIndices.push_back(
           arith::ConstantIndexOp::create(rewriter, loc, 0));
     }
 
-    // ذخیره بازگشتی تک‌تک مقادیر ثابت در بافر با affine.store
+    // The constant operation represents a multi-dimensional constant, so we
+    // will need to generate a store for each of the elements. The following
+    // functor recursively walks the dimensions of the constant shape,
+    // generating a store when the recursion hits the base case.
     SmallVector<Value, 2> indices;
     auto valueIt = constantValue.value_begin<FloatAttr>();
     std::function<void(uint64_t)> storeElements = [&](uint64_t dimension) {
+      // The last dimension is the base case of the recursion, at this point
+      // we store the element at the given index.
       if (dimension == valueShape.size()) {
         affine::AffineStoreOp::create(
             rewriter, loc, arith::ConstantOp::create(rewriter, loc, *valueIt++),
@@ -160,6 +188,8 @@ struct ConstantOpLowering : public OpConversionPattern<toy::ConstantOp> {
         return;
       }
 
+      // Otherwise, iterate over the current dimension and add the indices to
+      // the list.
       for (uint64_t i = 0, e = valueShape[dimension]; i != e; ++i) {
         indices.push_back(constantIndices[i]);
         storeElements(dimension + 1);
@@ -167,14 +197,17 @@ struct ConstantOpLowering : public OpConversionPattern<toy::ConstantOp> {
       }
     };
 
+    // Start the element storing recursion from the first dimension.
     storeElements(/*dimension=*/0);
+
+    // Replace this operation with the generated alloc.
     rewriter.replaceOp(op, alloc);
     return success();
   }
 };
 
 //===----------------------------------------------------------------------===//
-// الگوهای تبدیل: تعریف تابع (FuncOp)
+// ToyToAffine Conversion Patterns: Func operations
 //===----------------------------------------------------------------------===//
 
 struct FuncOpLowering : public OpConversionPattern<toy::FuncOp> {
@@ -183,17 +216,19 @@ struct FuncOpLowering : public OpConversionPattern<toy::FuncOp> {
   LogicalResult
   matchAndRewrite(toy::FuncOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    // تنها تابع main تبدیل می‌شود، چون باقی توابع قبلاً Inlined شده‌اند
+    // We only lower the main function as we expect that all other functions
+    // have been inlined.
     if (op.getName() != "main")
       return failure();
 
+    // Verify that the given main has no inputs and results.
     if (op.getNumArguments() || op.getFunctionType().getNumResults()) {
       return rewriter.notifyMatchFailure(op, [](Diagnostic &diag) {
         diag << "expected 'main' to have 0 inputs and 0 results";
       });
     }
 
-    // ساخت تابع استاندارد func.func با همان بدنه
+    // Create a new non-toy function, with the same region.
     auto func = mlir::func::FuncOp::create(rewriter, op.getLoc(), op.getName(),
                                            op.getFunctionType());
     rewriter.inlineRegionBefore(op.getRegion(), func.getBody(), func.end());
@@ -203,7 +238,7 @@ struct FuncOpLowering : public OpConversionPattern<toy::FuncOp> {
 };
 
 //===----------------------------------------------------------------------===//
-// الگوهای تبدیل: چاپ (PrintOp)
+// ToyToAffine Conversion Patterns: Print operations
 //===----------------------------------------------------------------------===//
 
 struct PrintOpLowering : public OpConversionPattern<toy::PrintOp> {
@@ -212,7 +247,8 @@ struct PrintOpLowering : public OpConversionPattern<toy::PrintOp> {
   LogicalResult
   matchAndRewrite(toy::PrintOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    // toy.print حذف نمی‌شود، تنها عملوند ورودی آن به MemRef ارتقا می‌یابد
+    // We don't lower "toy.print" in this pass, but we need to update its
+    // operands.
     rewriter.modifyOpInPlace(op,
                              [&] { op->setOperands(adaptor.getOperands()); });
     return success();
@@ -220,7 +256,7 @@ struct PrintOpLowering : public OpConversionPattern<toy::PrintOp> {
 };
 
 //===----------------------------------------------------------------------===//
-// الگوهای تبدیل: بازگشت (ReturnOp)
+// ToyToAffine Conversion Patterns: Return operations
 //===----------------------------------------------------------------------===//
 
 struct ReturnOpLowering : public OpConversionPattern<toy::ReturnOp> {
@@ -229,17 +265,19 @@ struct ReturnOpLowering : public OpConversionPattern<toy::ReturnOp> {
   LogicalResult
   matchAndRewrite(toy::ReturnOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
+    // During this lowering, we expect that all function calls have been
+    // inlined.
     if (op.hasOperand())
       return failure();
 
-    // تبدیل toy.return به func.return
+    // We lower "toy.return" directly to "func.return".
     rewriter.replaceOpWithNewOp<func::ReturnOp>(op);
     return success();
   }
 };
 
 //===----------------------------------------------------------------------===//
-// الگوهای تبدیل: ترانهاده (TransposeOp)
+// ToyToAffine Conversion Patterns: Transpose operations
 //===----------------------------------------------------------------------===//
 
 struct TransposeOpLowering : public OpConversionPattern<toy::TransposeOp> {
@@ -252,7 +290,8 @@ struct TransposeOpLowering : public OpConversionPattern<toy::TransposeOp> {
     lowerOpToLoops(op, rewriter, [&](OpBuilder &builder, ValueRange loopIvs) {
       Value input = adaptor.getInput();
 
-      // لود با اندیس‌های معکوس برای انجام عمل ترانهاده
+      // Transpose the elements by generating a load from the
+      // reverse indices.
       SmallVector<Value, 2> reverseIvs(llvm::reverse(loopIvs));
       return affine::AffineLoadOp::create(builder, loc, input, reverseIvs);
     });
@@ -266,6 +305,9 @@ struct TransposeOpLowering : public OpConversionPattern<toy::TransposeOp> {
 // ToyToAffineLoweringPass
 //===----------------------------------------------------------------------===//
 
+/// This is a partial lowering to affine loops of the toy operations that are
+/// computationally intensive (like matmul for example...) while keeping the
+/// rest of the code in the Toy dialect.
 namespace {
 struct ToyToAffineLoweringPass
     : public PassWrapper<ToyToAffineLoweringPass, OperationPass<ModuleOp>> {
@@ -281,33 +323,46 @@ struct ToyToAffineLoweringPass
 } // namespace
 
 void ToyToAffineLoweringPass::runOnOperation() {
-  // ۱. تعریف هدف تبدیل (ConversionTarget)
+  // The first thing to define is the conversion target. This will define the
+  // final target for this lowering.
   ConversionTarget target(getContext());
 
-  // دیالکت‌های استاندارد و قانونی در سطح پایین
+  // We define the specific operations, or dialects, that are legal targets for
+  // this lowering. In our case, we are lowering to a combination of the
+  // `Affine`, `Arith`, `Func`, and `MemRef` dialects.
   target.addLegalDialect<affine::AffineDialect, BuiltinDialect,
                          arith::ArithDialect, func::FuncDialect,
                          memref::MemRefDialect>();
 
-  // علامت‌گذاری دیالکت Toy به عنوان غیرقانونی به جز استثنای پویا برای toy.print
+  // We also define the Toy dialect as Illegal so that the conversion will fail
+  // if any of these operations are *not* converted. Given that we actually want
+  // a partial lowering, we explicitly mark the Toy operations that don't want
+  // to lower, `toy.print`, as `legal`. `toy.print` will still need its operands
+  // to be updated though (as we convert from TensorType to MemRefType), so we
+  // only treat it as `legal` if its operands are legal.
   target.addIllegalDialect<toy::ToyDialect>();
   target.addDynamicallyLegalOp<toy::PrintOp>([](toy::PrintOp op) {
     return llvm::none_of(op->getOperandTypes(),
                          [](Type type) { return llvm::isa<TensorType>(type); });
   });
 
-  // ۲. افزودن الگوهای تبدیل (RewritePatternSet)
+  // Now that the conversion target has been defined, we just need to provide
+  // the set of patterns that will lower the Toy operations.
   RewritePatternSet patterns(&getContext());
   patterns.add<AddOpLowering, ConstantOpLowering, FuncOpLowering, MulOpLowering,
                PrintOpLowering, ReturnOpLowering, TransposeOpLowering>(
       &getContext());
 
-  // ۳. اجرای تبدیل جزئی (Partial Conversion)
+  // With the target and rewrite patterns defined, we can now attempt the
+  // conversion. The conversion will signal failure if any of our `illegal`
+  // operations were not converted successfully.
   if (failed(
           applyPartialConversion(getOperation(), target, std::move(patterns))))
     signalPassFailure();
 }
 
+/// Create a pass for lowering operations in the `Affine` and `Std` dialects,
+/// for a subset of the Toy IR (e.g. matmul).
 std::unique_ptr<Pass> mlir::toy::createLowerToAffinePass() {
   return std::make_unique<ToyToAffineLoweringPass>();
 }

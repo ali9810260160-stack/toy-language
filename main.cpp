@@ -145,8 +145,9 @@ static int loadAndProcessMLIR(mlir::MLIRContext &context,
     // ۱. درون‌ریزی تمام توابع خصوصی در تابع main و حذف توابع زائد
     pm.addPass(mlir::createInlinerPass());
 
-    // ۲. استنتاج شکل‌ها، ساده‌سازی و حذف زیرعبارت‌های مشترک (CSE)
+    // ۲. فولد کردن استراکت‌ها، استنتاج شکل‌ها، ساده‌سازی و حذف زیرعبارت‌های مشترک (CSE)
     mlir::OpPassManager &optPM = pm.nest<mlir::toy::FuncOp>();
+    optPM.addPass(mlir::createCanonicalizerPass());
     optPM.addPass(mlir::toy::createShapeInferencePass());
     optPM.addPass(mlir::createCanonicalizerPass());
     optPM.addPass(mlir::createCSEPass());

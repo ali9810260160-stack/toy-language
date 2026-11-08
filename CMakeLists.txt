@@ -25,7 +25,7 @@ include_directories(include)
 
 add_definitions(${LLVM_DEFINITIONS})
 
-add_executable(toyc-ch6 main.cpp
+add_executable(toyc-ch7 main.cpp
         include/toy/lexer.h
         include/toy/AST.h
         include/toy/Parser.h
@@ -40,7 +40,7 @@ add_executable(toyc-ch6 main.cpp
         LowerToAffineLoops.cpp
         LowerToLLVM.cpp)
 
-llvm_update_compile_flags(toyc-ch6)
+llvm_update_compile_flags(toyc-ch7)
 
 llvm_map_components_to_libnames(llvm_libs
   Core
@@ -49,7 +49,7 @@ llvm_map_components_to_libnames(llvm_libs
   OrcJIT
 )
 
-target_link_libraries(toyc-ch6
+target_link_libraries(toyc-ch7
         PRIVATE
         ${llvm_libs}
         MLIRAnalysis
@@ -105,6 +105,6 @@ set(LLVM_TARGET_DEFINITIONS include/toy/ToyCombine.td)
 mlir_tablegen(ToyCombine.inc -gen-rewriters)
 add_public_tablegen_target(MLIRToyCombineIncGen)
 
-add_dependencies(toyc-ch6 MLIRToyOpsIncGen)
-add_dependencies(toyc-ch6 MLIRToyCombineIncGen)
-add_dependencies(toyc-ch6 MLIRToyShapeInferenceInterfaceIncGen)
+add_dependencies(toyc-ch7 MLIRToyOpsIncGen)
+add_dependencies(toyc-ch7 MLIRToyCombineIncGen)
+add_dependencies(toyc-ch7 MLIRToyShapeInferenceInterfaceIncGen)

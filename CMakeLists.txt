@@ -25,7 +25,7 @@ include_directories(include)
 
 add_definitions(${LLVM_DEFINITIONS})
 
-add_executable(toyc-ch5 main.cpp
+add_executable(toyc-ch6 main.cpp
         include/toy/lexer.h
         include/toy/AST.h
         include/toy/Parser.h
@@ -37,30 +37,55 @@ add_executable(toyc-ch5 main.cpp
         MLIRGen.cpp
         ToyCombine.cpp
         ShapeInferencePass.cpp
-        LowerToAffineLoops.cpp)
+        LowerToAffineLoops.cpp
+        LowerToLLVM.cpp)
 
-llvm_update_compile_flags(toyc-ch5)
+llvm_update_compile_flags(toyc-ch6)
 
-target_link_libraries(toyc-ch5
+llvm_map_components_to_libnames(llvm_libs
+  Core
+  Support
+  nativecodegen
+  OrcJIT
+)
+
+target_link_libraries(toyc-ch6
         PRIVATE
-        LLVMSupport
-        MLIRIR
-        MLIRFunctionInterfaces
-        MLIRSideEffectInterfaces
+        ${llvm_libs}
+        MLIRAnalysis
+        MLIRBuiltinToLLVMIRTranslation
         MLIRCallInterfaces
         MLIRCastInterfaces
+        MLIRExecutionEngine
+        MLIRFunctionInterfaces
+        MLIRIR
+        MLIRLLVMCommonConversion
+        MLIRLLVMDialect
+        MLIRLLVMIRTransforms
+        MLIRLLVMToLLVMIRTranslation
+        MLIRMemRefDialect
         MLIRParser
-        MLIRSupport
-        MLIRAnalysis
         MLIRPass
+        MLIRRegisterAllDialects
+        MLIRRegisterAllExtensions
+        MLIRRegisterAllPasses
+        MLIRSideEffectInterfaces
+        MLIRSupport
+        MLIRTargetLLVMIRExport
         MLIRTransforms
         MLIRTransformUtils
         MLIRAffineDialect
         MLIRAffineTransforms
-        MLIRMemRefDialect
         MLIRFuncDialect
         MLIRFuncAllExtensions
         MLIRArithDialect
+        MLIRAffineToStandard
+        MLIRSCFToControlFlow
+        MLIRArithToLLVM
+        MLIRMemRefToLLVM
+        MLIRControlFlowToLLVM
+        MLIRFuncToLLVM
+        MLIRSCFDialect
 )
 
 set(LLVM_TARGET_DEFINITIONS include/toy/ShapeInferenceInterface.td)
@@ -80,6 +105,6 @@ set(LLVM_TARGET_DEFINITIONS include/toy/ToyCombine.td)
 mlir_tablegen(ToyCombine.inc -gen-rewriters)
 add_public_tablegen_target(MLIRToyCombineIncGen)
 
-add_dependencies(toyc-ch5 MLIRToyOpsIncGen)
-add_dependencies(toyc-ch5 MLIRToyCombineIncGen)
-add_dependencies(toyc-ch5 MLIRToyShapeInferenceInterfaceIncGen)
+add_dependencies(toyc-ch6 MLIRToyOpsIncGen)
+add_dependencies(toyc-ch6 MLIRToyCombineIncGen)
+add_dependencies(toyc-ch6 MLIRToyShapeInferenceInterfaceIncGen)
